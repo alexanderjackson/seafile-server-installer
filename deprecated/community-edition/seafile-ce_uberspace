@@ -73,14 +73,7 @@ fi
 # -------------------------------------------
 # Python requirements
 # -------------------------------------------
-cd
-mkdir -p ~/bin ~/lib/python2.7
-easy_install-2.7 simplejson
-curl --silent http://effbot.org/media/downloads/Imaging-1.1.7.tar.gz | tar -xzf -
-cd Imaging-1.1.7
-perl -pi -e 's|/usr/lib|/usr/lib64|g' setup.py
-python2.7 setup.py install
-rm -rf Imaging-1.1.7
+pip-2.7 install Pillow --user
 
 
 # -------------------------------------------
@@ -88,7 +81,7 @@ rm -rf Imaging-1.1.7
 # -------------------------------------------
 mkdir -p ~/seafile/installed/
 cd ~/seafile/
-wget https://download.seafile.de/seafile-server_latest_x86-64.tar.gz
+wget --no-check-certificate https://download.seafile.de/seafile-server_latest_x86-64.tar.gz
 tar xzf seafile-server_latest_x86-64.tar.gz
 SEAFILE_VERSION=$(basename ~/seafile/seafile-server-* | awk -F'-' ' { print $3  }')
 mv seafile-server_latest_x86-64.tar.gz installed/seafile-server_${SEAFILE_VERSION}_x86-64.tar.gz
@@ -181,7 +174,7 @@ cat <<EOF
 
   Creating local EMAIL_HOST_USER. Use ${EMAIL_HOST_USER_PW} as the users password.
   If you choose to use a different password, you must change it accordingly
-  in ~/seafile/seahub_settings.py and restart seafile with 'seafile restart'
+  in ~/seafile/conf/seahub_settings.py and restart seafile with 'seafile restart'
 
 EOF
 # Delete pre-existing user if present
@@ -193,26 +186,24 @@ vadduser seafile
 # -------------------------------------------
 # Apache htaccess
 # -------------------------------------------
-cat > ~/html/.htaccess <<"EOF"
+read -e -p "Enter the domain at which the service will be reachable: " -i "${WHOAMI}.${HOSTNAME}" DOMAIN
+read -e -p "Enter the document root for that domain: " -i "$HOME/html" DOCUMENT_ROOT
+
+cat > ${DOCUMENT_ROOT}/.htaccess <<EOF
 RewriteEngine on
 
 # Redirect to https
 RewriteCond %{HTTPS} !=on
 RewriteCond %{ENV:HTTPS} !=on
-RewriteRule ^(.*)$ https://WHOAMI.HOSTNAME/$1 [L,R=301]
+RewriteRule ^(.*)$ https://$DOMAIN/\$1 [L,R=301]
 
 # Port of seafile httpserver (compare ~/haiwen/seafile-data/seafile.conf)
-RewriteRule ^seafhttp/(.*)$ http://localhost:FILESERVER_PORT/$1 [QSA,P,L]
+RewriteRule ^seafhttp/(.*)$ http://localhost:$FILESERVER_PORT/\$1 [QSA,P,L]
 
-RewriteRule ^/(seafmedia.*)$ /$1 [QSA,L,PT]
+RewriteRule ^/(seafmedia.*)$ /\$1 [QSA,L,PT]
 RewriteCond %{REQUEST_FILENAME} !-f
-RewriteRule ^(.*)$ /fcgi-bin/seahub/$1 [QSA,L,E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+RewriteRule ^(.*)$ /fcgi-bin/seahub/\$1 [QSA,L,E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
 EOF
-
-# Set seahub port
-eval sed -i 's/WHOAMI/${WHOAMI}/' ~/html/.htaccess
-eval sed -i 's/HOSTNAME/${HOSTNAME}/' ~/html/.htaccess
-eval sed -i 's/FILESERVER_PORT/${FILESERVER_PORT}/' ~/html/.htaccess
 
 
 # -------------------------------------------
@@ -230,6 +221,7 @@ sys.path.insert(0, seafile_directory + '/seafile-server-latest/seahub')
 
 # Set environment variables (compare ~/haiwen/seafile-server-latest/seahub.sh)
 os.environ['CCNET_CONF_DIR'] = seafile_directory + '/ccnet'
+os.environ['SEAFILE_CENTRAL_CONF_DIR'] = seafile_directory + '/conf'
 os.environ['SEAHUB_LOG_DIR'] = seafile_directory + '/logs'
 os.environ['SEAFILE_CONF_DIR'] = seafile_directory + '/seafile-data'
 
@@ -308,7 +300,7 @@ DEFAULT_SEAHUB_DB=${TOPDIR}/seahub.db
 DEFAULT_CONF_DIR=${TOPDIR}/conf
 SEAFILE_DATA_DIR=${TOPDIR}/seafile-data
 LIBRARY_TEMPLATE_DIR=${SEAFILE_DATA_DIR}/library-template
-DEST_SETTINGS_PY=${TOPDIR}/seahub_settings.py
+DEST_SETTINGS_PY=${DEFAULT_CONF_DIR}/seahub_settings.py
 CCNET_INIT=${INSTALLPATH}/seafile/bin/ccnet-init
 SEAF_SERVER_INIT=${INSTALLPATH}/seafile/bin/seaf-server-init
 MEDIA_DIR=${INSTALLPATH}/seahub/media
@@ -325,14 +317,13 @@ LD_LIBRARY_PATH=$SEAFILE_LD_LIBRARY_PATH "${CCNET_INIT}" -c "${DEFAULT_CCNET_CON
   --name "${SERVER_NAME}" --port "${CCNET_PORT}" --host "${HOSTNAME}"
 
 # Fix service url
-eval "sed -i 's/^SERVICE_URL.*/SERVICE_URL = https:\/\/${WHOAMI}.${HOSTNAME}/' ${DEFAULT_CCNET_CONF_DIR}/ccnet.conf"
-
+eval "sed -i 's/^SERVICE_URL.*/SERVICE_URL = https:\/\/${DOMAIN}/' ${DEFAULT_CCNET_CONF_DIR}/ccnet.conf"
 
 # -------------------------------------------
 # Create seafile conf
 # -------------------------------------------
 LD_LIBRARY_PATH=$SEAFILE_LD_LIBRARY_PATH ${SEAF_SERVER_INIT} --seafile-dir "${SEAFILE_DATA_DIR}" \
-  --port ${SEAFILE_PORT} --fileserver-port ${FILESERVER_PORT}
+  --central-config-dir "${DEFAULT_CONF_DIR}" --port ${SEAFILE_PORT} --fileserver-port ${FILESERVER_PORT}
 
 
 # -------------------------------------------
@@ -398,9 +389,13 @@ cp -f ${SRC_DOCS_DIR}/*.doc ${LIBRARY_TEMPLATE_DIR}
 # -------------------------------------------
 # Configuring ccnet.conf
 # -------------------------------------------
+
+# move ccnet.conf to default conf dir
+mv ${DEFAULT_CCNET_CONF_DIR}/ccnet.conf ${DEFAULT_CONF_DIR}/ccnet.conf
+
 SEAFILESQLPW=$(grep -A10000  "\[client\]" ${HOME}/.my.cnf | grep -m1 password | awk -F'=' {'print $2'} | awk -F' ' {'print $1'})
 
-cat >> ${DEFAULT_CCNET_CONF_DIR}/ccnet.conf <<EOF
+cat >> ${DEFAULT_CONF_DIR}/ccnet.conf <<EOF
 [Database]
 ENGINE = mysql
 HOST = 127.0.0.1
@@ -454,7 +449,7 @@ DEFAULT_FROM_EMAIL                  = 'EMAIL_HOST_USER'
 SERVER_EMAIL                        = 'EMAIL_HOST_USER'
 REPLACE_FROM_EMAIL                  = True
 TIME_ZONE                           = 'Europe/Berlin'
-SITE_BASE                           = 'https://${WHOAMI}.${HOSTNAME}'
+SITE_BASE                           = 'https://${DOMAIN}'
 SITE_NAME                           = 'Seafile Server'
 SITE_TITLE                          = 'Seafile Server'
 SITE_ROOT                           = '/'
@@ -468,7 +463,7 @@ FILE_PREVIEW_MAX_SIZE               = 30 * 1024 * 1024
 SESSION_COOKIE_AGE                  = 60 * 60 * 24 * 7 * 2
 SESSION_SAVE_EVERY_REQUEST          = False
 SESSION_EXPIRE_AT_BROWSER_CLOSE     = False
-FILE_SERVER_ROOT                    = 'https://${WHOAMI}.${HOSTNAME}/seafhttp'
+FILE_SERVER_ROOT                    = 'https://${DOMAIN}/seafhttp'
 DEBUG = False
 EOF
 
@@ -508,7 +503,7 @@ cat > ~/seafile/seafile-ce_uberspace.log <<EOF
   Your Seafile server is installed
   -----------------------------------------------------------------
   Server Name:         ${SERVER_NAME}
-  Server Address:      https://${WHOAMI}.${HOSTNAME}
+  Server Address:      https://${DOMAIN}
   Seafile Admin:       ${SEAFILE_ADMIN}
   Admin Password:      ${SEAFILE_ADMIN_PW}
   Seafile Data Dir:    ${SEAFILE_DATA_DIR}
